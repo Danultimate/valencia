@@ -60,6 +60,18 @@ services:
     volumes:
       - celerybeat_data:/app/celerybeat
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_SCRAPE_API_KEY: ${VITE_SCRAPE_API_KEY:-}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - fastapi
+
 volumes:
   postgres_data:
   celerybeat_data:
