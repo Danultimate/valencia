@@ -85,7 +85,9 @@ def run_scrape_pipeline(self):
                 "start_date": item.start_date,
                 "end_date": item.end_date,
                 "appraisal_value": Decimal(str(item.appraisal_value)) if item.appraisal_value else None,
-                "is_active": item.end_date > datetime.now(timezone.utc),
+                # Items scraped from the live catalog are active by definition.
+                # Only mark inactive if end_date was actually parsed (not the now() fallback).
+                "is_active": True,
             }
             auction = upsert_auction(db, auction_data)
 

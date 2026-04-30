@@ -95,9 +95,14 @@ def _extract_auction_id(url: str) -> str:
 # Page scrapers                                                                #
 # --------------------------------------------------------------------------- #
 
+_logged_kavel_html = False  # log HTML once for selector discovery
+
+
 async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnapshot] | None:
+    global _logged_kavel_html
     try:
         await page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+        await page.wait_for_timeout(4000)
     except PWTimeout:
         logger.warning("Timeout loading %s — skipping", url)
         return None
@@ -114,19 +119,31 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
         except Exception:
             return None
 
+    # Log a snippet of the first kavel page's HTML to discover real selectors
+    if not _logged_kavel_html:
+        _logged_kavel_html = True
+        try:
+            html = await page.content()
+            logger.info("KAVEL PAGE HTML SAMPLE (first 3000 chars): %s", html[:3000])
+        except Exception:
+            pass
+
     title = (
         await text("h1")
         or await text(".lot-title")
         or await text(".auction-title")
+        or await text(".kavel-title")
         or "Onbekend"
     )
 
-    # Current bid — try multiple common selectors
+    # Current bid
     bid_raw = (
         await text(".current-bid")
         or await text(".bid-amount")
         or await text("[data-current-bid]")
         or await text(".price")
+        or await text(".huidig-bod")
+        or await text(".current-price")
     )
     current_bid = _parse_price(bid_raw) or 0.0
 
@@ -136,11 +153,13 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
         or await text(".closing-time")
         or await text("[data-end-time]")
         or await text(".auction-end")
+        or await text(".sluitingstijd")
+        or await text(".einddatum")
     )
     end_date = _parse_dutch_datetime(end_raw) or datetime.now(timezone.utc)
 
     # Start date (best effort)
-    start_raw = await text(".start-date") or await text("[data-start-time]")
+    start_raw = await text(".start-date") or await text("[data-start-time]") or await text(".startdatum")
     start_date = _parse_dutch_datetime(start_raw) or datetime.now(timezone.utc)
 
     # Category
@@ -148,16 +167,18 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
         await text(".category")
         or await text(".breadcrumb li:nth-child(2)")
         or await text("[data-category]")
+        or await text(".categorie")
     )
 
     # Location
-    location = await text(".location") or await text("[data-location]")
+    location = await text(".location") or await text("[data-location]") or await text(".locatie")
 
     # Appraisal value (taxatiewaarde / schattingswaarde)
     appraisal_raw = (
         await text(".appraisal-value")
         or await text(".taxatiewaarde")
         or await text("[data-appraisal]")
+        or await text(".schattingswaarde")
     )
     appraisal_value = _parse_price(appraisal_raw)
 
