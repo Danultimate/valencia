@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes import items, opportunities, scrape
 from api.schemas import HealthResponse
 from storage.database import check_db_health, init_db, SessionLocal
-from storage.repository import get_last_scraped_at
+from storage.repository import count_active_auctions, get_last_scraped_at
 
 app = FastAPI(
     title="Valencia Auctions API",
@@ -45,15 +45,21 @@ def health_check():
         pass
 
     last_scraped_at = None
+    active_count = 0
     try:
         db = SessionLocal()
         last_scraped_at = get_last_scraped_at(db)
+        active_count = count_active_auctions(db)
         db.close()
     except Exception:
         pass
 
+    overall = "ok" if db_status == "ok" and redis_status == "ok" else "degraded"
+
     return HealthResponse(
-        db=db_status,
+        status=overall,
+        database=db_status,
         redis=redis_status,
         last_scraped_at=last_scraped_at,
+        active_auctions=active_count,
     )

@@ -22,4 +22,4 @@ def list_opportunities(
         schema.current_bid = get_current_bid(db, auction.id)
         items.append(schema)
 
-    return OpportunitiesResponse(items=items)
+    return OpportunitiesResponse(items=items, count=len(items))

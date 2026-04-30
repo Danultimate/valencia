@@ -49,6 +49,7 @@ class AuctionListResponse(BaseModel):
 
 class OpportunitiesResponse(BaseModel):
     items: list[AuctionSchema]
+    count: int
 
 
 class ScrapeTaskResponse(BaseModel):
@@ -57,6 +58,8 @@ class ScrapeTaskResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    db: str
+    status: str
+    database: str
     redis: str
     last_scraped_at: datetime | None
+    active_auctions: int

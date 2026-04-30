@@ -89,6 +89,10 @@ def get_active_auctions(
     return list(db.scalars(stmt))
 
 
+def count_active_auctions(db: Session) -> int:
+    return db.scalar(select(func.count()).select_from(Auction).where(Auction.is_active == True)) or 0
+
+
 def get_opportunities(
     db: Session,
     min_score: float = 0.0,
