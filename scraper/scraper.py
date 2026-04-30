@@ -267,7 +267,9 @@ async def _collect_item_urls(page: Page) -> list[str]:
         while current_kavels_url:
             await asyncio.sleep(POLITE_DELAY)
             try:
-                await page.goto(current_kavels_url, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
+                await page.goto(current_kavels_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+                # Give JS time to render the kavel list without waiting for websocket silence
+                await page.wait_for_timeout(4000)
             except PWTimeout:
                 logger.warning("Timeout on kavels page %s — skipping", current_kavels_url)
                 break
