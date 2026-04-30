@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Gavel, TrendingUp } from 'lucide-react'
 import { useState } from 'react'
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
 import { fetchHealth, triggerScrape } from '../api/client'
 
 export default function Layout() {
-  const location = useLocation()
   const [scraping, setScraping] = useState(false)
   const [scrapeMsg, setScrapeMsg] = useState<string | null>(null)
 
