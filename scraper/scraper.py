@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 TARGET_URL = os.environ.get("TARGET_URL", "https://www.onlineveilingmeester.nl")
 POLITE_DELAY = float(os.environ.get("SCRAPE_POLITE_DELAY_SECONDS", "2"))
-PAGE_TIMEOUT_MS = 30_000
+PAGE_TIMEOUT_MS = 60_000
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -193,7 +193,7 @@ async def _collect_item_urls(page: Page) -> list[str]:
 
     while current_url:
         try:
-            response = await page.goto(current_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+            response = await page.goto(current_url, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
             title = await page.title()
             status = response.status if response else "?"
             logger.info("Catalog page: %s (title: %r, status: %s)", current_url, title, status)
@@ -264,7 +264,7 @@ async def _collect_item_urls(page: Page) -> list[str]:
     for veiling_url in veiling_urls:
         await asyncio.sleep(POLITE_DELAY)
         try:
-            await page.goto(veiling_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+            await page.goto(veiling_url, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
         except PWTimeout:
             logger.warning("Timeout on veiling page %s — skipping", veiling_url)
             continue
