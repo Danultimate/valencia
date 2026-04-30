@@ -182,39 +182,80 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
 async def _collect_item_urls(page: Page) -> list[str]:
     """Navigate catalog pages and collect all auction item URLs."""
     urls: list[str] = []
-    current_url = f"{TARGET_URL}/veilingen"
 
+    # Try candidate catalog paths in order until one responds < 400
+    catalog_candidates = [
+        f"{TARGET_URL}/veilingen",
+        f"{TARGET_URL}/auctions",
+        f"{TARGET_URL}/lots",
+        f"{TARGET_URL}/kavels",
+        TARGET_URL,
+    ]
+
+    start_url: str | None = None
+    for candidate in catalog_candidates:
+        try:
+            response = await page.goto(candidate, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
+            final_url = page.url
+            title = await page.title()
+            status = response.status if response else "?"
+            logger.info("Catalog probe: %s → %s (title: %r, status: %s)",
+                        candidate, final_url, title, status)
+            if response and response.status < 400:
+                start_url = final_url
+                break
+        except PWTimeout:
+            logger.warning("Timeout probing %s", candidate)
+        except Exception as exc:
+            logger.warning("Error probing %s: %s", candidate, exc)
+
+    if not start_url:
+        logger.error("Could not find a valid catalog page — aborting")
+        return urls
+
+    # Common auction item URL path fragments (Dutch + English)
+    ITEM_PATTERNS = ["/lot/", "/kavel/", "/item/", "/veiling/", "/auction/", "/product/", "/object/"]
+
+    current_url: str | None = start_url
     while current_url:
         try:
-            await page.goto(current_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+            await page.goto(current_url, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
         except PWTimeout:
             logger.warning("Timeout on catalog page %s — stopping pagination", current_url)
             break
 
-        # Collect links matching auction item patterns
-        anchors = await page.query_selector_all(
-            "a[href*='/lot/'], a[href*='/kavel/'], a[href*='/item/'], "
-            "a.lot-link, a.auction-item-link, .lot-card a, .auction-card a"
-        )
-        for anchor in anchors:
-            href = await anchor.get_attribute("href")
-            if href:
-                full = href if href.startswith("http") else f"{TARGET_URL}{href}"
-                if full not in urls:
-                    urls.append(full)
+        all_anchors = await page.query_selector_all("a[href]")
+        page_new = 0
+        all_hrefs: list[str] = []
 
-        # Pagination — look for "next" link
+        for anchor in all_anchors:
+            href = await anchor.get_attribute("href")
+            if not href:
+                continue
+            all_hrefs.append(href)
+            full = href if href.startswith("http") else f"{TARGET_URL}{href}"
+            if any(pat in full for pat in ITEM_PATTERNS) and full not in urls:
+                urls.append(full)
+                page_new += 1
+
+        logger.info("Page %s — %d new item links (total: %d)", current_url, page_new, len(urls))
+
+        # When still 0 on first page, dump a sample so we can fix the patterns
+        if not urls:
+            unique_hrefs = list(dict.fromkeys(all_hrefs))
+            logger.warning("0 item URLs matched. Sample of all hrefs on page: %s",
+                           unique_hrefs[:30])
+
+        # Pagination
         next_el = await page.query_selector(
             "a[rel='next'], a.next, .pagination .next a, "
-            "a:has-text('Volgende'), a:has-text('>')"
+            "a:has-text('Volgende'), a:has-text('Next'), a:has-text('>')"
         )
         if next_el:
             next_href = await next_el.get_attribute("href")
             current_url = (
-                next_href
-                if next_href and next_href.startswith("http")
-                else f"{TARGET_URL}{next_href}"
-                if next_href
+                next_href if next_href and next_href.startswith("http")
+                else f"{TARGET_URL}{next_href}" if next_href
                 else None
             )
         else:
