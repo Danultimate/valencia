@@ -180,71 +180,51 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
 
 
 async def _collect_item_urls(page: Page) -> list[str]:
-    """Navigate catalog pages and collect all auction item URLs."""
-    urls: list[str] = []
+    """Two-level scrape: catalog → veiling event pages → individual kavel URLs."""
+    # ------------------------------------------------------------------ #
+    # Level 1: collect veiling event URLs from /nl/veilingen              #
+    # ------------------------------------------------------------------ #
+    VEILING_CATALOG = f"{TARGET_URL}/nl/veilingen"
+    # Pattern for individual veiling event pages: /nl/veilingen/<numeric-id>
+    VEILING_ID_RE = re.compile(r"^/nl/veilingen/(\d+)(/|$)")
 
-    # Try candidate catalog paths in order until one responds < 400
-    catalog_candidates = [
-        f"{TARGET_URL}/veilingen",
-        f"{TARGET_URL}/auctions",
-        f"{TARGET_URL}/lots",
-        f"{TARGET_URL}/kavels",
-        TARGET_URL,
-    ]
+    veiling_urls: list[str] = []
+    current_url: str | None = VEILING_CATALOG
 
-    start_url: str | None = None
-    for candidate in catalog_candidates:
-        try:
-            response = await page.goto(candidate, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
-            final_url = page.url
-            title = await page.title()
-            status = response.status if response else "?"
-            logger.info("Catalog probe: %s → %s (title: %r, status: %s)",
-                        candidate, final_url, title, status)
-            if response and response.status < 400:
-                start_url = final_url
-                break
-        except PWTimeout:
-            logger.warning("Timeout probing %s", candidate)
-        except Exception as exc:
-            logger.warning("Error probing %s: %s", candidate, exc)
-
-    if not start_url:
-        logger.error("Could not find a valid catalog page — aborting")
-        return urls
-
-    # Common auction item URL path fragments (Dutch + English)
-    ITEM_PATTERNS = ["/lot/", "/kavel/", "/item/", "/veiling/", "/auction/", "/product/", "/object/"]
-
-    current_url: str | None = start_url
     while current_url:
         try:
-            await page.goto(current_url, timeout=PAGE_TIMEOUT_MS, wait_until="networkidle")
+            response = await page.goto(current_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+            title = await page.title()
+            status = response.status if response else "?"
+            logger.info("Catalog page: %s (title: %r, status: %s)", current_url, title, status)
         except PWTimeout:
-            logger.warning("Timeout on catalog page %s — stopping pagination", current_url)
+            logger.warning("Timeout on catalog page %s — stopping", current_url)
+            break
+        except Exception as exc:
+            logger.warning("Error loading catalog %s: %s — stopping", current_url, exc)
             break
 
         all_anchors = await page.query_selector_all("a[href]")
-        page_new = 0
         all_hrefs: list[str] = []
+        page_new = 0
 
         for anchor in all_anchors:
             href = await anchor.get_attribute("href")
             if not href:
                 continue
             all_hrefs.append(href)
-            full = href if href.startswith("http") else f"{TARGET_URL}{href}"
-            if any(pat in full for pat in ITEM_PATTERNS) and full not in urls:
-                urls.append(full)
-                page_new += 1
+            path = href if href.startswith("/") else ("/" + href.split(TARGET_URL, 1)[-1]) if TARGET_URL in href else None
+            if path and VEILING_ID_RE.match(path):
+                full = f"{TARGET_URL}{path}"
+                if full not in veiling_urls:
+                    veiling_urls.append(full)
+                    page_new += 1
 
-        logger.info("Page %s — %d new item links (total: %d)", current_url, page_new, len(urls))
+        logger.info("Catalog %s — %d new veiling links (total: %d)", current_url, page_new, len(veiling_urls))
 
-        # When still 0 on first page, dump a sample so we can fix the patterns
-        if not urls:
+        if not veiling_urls and not page_new:
             unique_hrefs = list(dict.fromkeys(all_hrefs))
-            logger.warning("0 item URLs matched. Sample of all hrefs on page: %s",
-                           unique_hrefs[:30])
+            logger.warning("0 veiling URLs matched. Sample hrefs: %s", unique_hrefs[:30])
 
         # Pagination
         next_el = await page.query_selector(
@@ -263,8 +243,60 @@ async def _collect_item_urls(page: Page) -> list[str]:
 
         await asyncio.sleep(POLITE_DELAY)
 
-    logger.info("Collected %d auction URLs", len(urls))
-    return urls
+    logger.info("Level-1 complete — %d veiling event pages found", len(veiling_urls))
+
+    # ------------------------------------------------------------------ #
+    # Level 2: visit each veiling event page and collect kavel/lot URLs   #
+    # ------------------------------------------------------------------ #
+    # Known patterns for individual lots on this site; we'll also log
+    # unmatched hrefs from the first veiling page so we can refine.
+    KAVEL_PATTERNS = [
+        re.compile(r"/nl/kavels?/\d+"),
+        re.compile(r"/nl/lot/\d+"),
+        re.compile(r"/nl/item/\d+"),
+        re.compile(r"/nl/object/\d+"),
+        re.compile(r"/nl/veilingen/\d+/\w"),  # e.g. /nl/veilingen/8833/kavel-title
+    ]
+
+    item_urls: list[str] = []
+    logged_sample = False
+
+    for veiling_url in veiling_urls:
+        await asyncio.sleep(POLITE_DELAY)
+        try:
+            await page.goto(veiling_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+        except PWTimeout:
+            logger.warning("Timeout on veiling page %s — skipping", veiling_url)
+            continue
+        except Exception as exc:
+            logger.warning("Error loading veiling %s: %s — skipping", veiling_url, exc)
+            continue
+
+        anchors = await page.query_selector_all("a[href]")
+        hrefs_on_page: list[str] = []
+        page_new = 0
+
+        for anchor in anchors:
+            href = await anchor.get_attribute("href")
+            if not href:
+                continue
+            hrefs_on_page.append(href)
+            full = href if href.startswith("http") else f"{TARGET_URL}{href}"
+            path = full.replace(TARGET_URL, "")
+            if any(pat.search(path) for pat in KAVEL_PATTERNS) and full not in item_urls:
+                item_urls.append(full)
+                page_new += 1
+
+        logger.info("Veiling %s — %d new kavel links (running total: %d)", veiling_url, page_new, len(item_urls))
+
+        # Log a href sample from the first veiling page to help tune patterns
+        if not logged_sample:
+            logged_sample = True
+            unique = list(dict.fromkeys(hrefs_on_page))
+            logger.info("First veiling page href sample (for pattern tuning): %s", unique[:40])
+
+    logger.info("Collected %d kavel URLs across %d veiling events", len(item_urls), len(veiling_urls))
+    return item_urls
 
 
 # --------------------------------------------------------------------------- #
