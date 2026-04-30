@@ -37,7 +37,9 @@ services:
         condition: service_healthy
 
   celery-worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
     restart: unless-stopped
     command: celery -A worker.tasks worker --loglevel=info --concurrency=2
     env_file: .env
