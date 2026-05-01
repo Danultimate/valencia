@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeo
 logger = logging.getLogger(__name__)
 
 TARGET_URL = os.environ.get("TARGET_URL", "https://www.onlineveilingmeester.nl")
-POLITE_DELAY = float(os.environ.get("SCRAPE_POLITE_DELAY_SECONDS", "2"))
+POLITE_DELAY = float(os.environ.get("SCRAPE_POLITE_DELAY_SECONDS", "0.5"))
 PAGE_TIMEOUT_MS = 60_000
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -102,7 +102,7 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
     global _logged_kavel_html
     try:
         await page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(4000)
+        await page.wait_for_timeout(2500)
     except PWTimeout:
         logger.warning("Timeout loading %s — skipping", url)
         return None
@@ -293,7 +293,7 @@ async def _collect_item_urls(page: Page) -> list[str]:
             try:
                 await page.goto(current_kavels_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
                 # Give JS time to render the kavel list without waiting for websocket silence
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(2500)
             except PWTimeout:
                 logger.warning("Timeout on kavels page %s — skipping", current_kavels_url)
                 break
@@ -348,26 +348,37 @@ async def _collect_item_urls(page: Page) -> list[str]:
 # Public entry point                                                           #
 # --------------------------------------------------------------------------- #
 
+SCRAPE_CONCURRENCY = int(os.environ.get("SCRAPE_CONCURRENCY", "8"))
+
+
 async def scrape_all() -> list[tuple[AuctionItem, BidSnapshot]]:
     results: list[tuple[AuctionItem, BidSnapshot]] = []
+    semaphore = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(user_agent=USER_AGENT)
-        page = await context.new_page()
 
-        urls = await _collect_item_urls(page)
+        collector = await context.new_page()
+        urls = await _collect_item_urls(collector)
+        await collector.close()
 
-        for url in urls:
-            await asyncio.sleep(POLITE_DELAY)
-            try:
-                result = await _scrape_item_page(page, url)
-                if result:
-                    results.append(result)
-                    logger.debug("Scraped %s — bid: %.2f", result[0].id, result[1].bid_amount)
-            except Exception as exc:
-                logger.error("Unhandled error scraping %s: %s", url, exc)
+        logger.info("Scraping %d kavel pages with concurrency=%d", len(urls), SCRAPE_CONCURRENCY)
 
+        async def _scrape_one(url: str) -> None:
+            async with semaphore:
+                page = await context.new_page()
+                try:
+                    result = await _scrape_item_page(page, url)
+                    if result:
+                        results.append(result)
+                        logger.debug("Scraped %s — bid: %.2f", result[0].id, result[1].bid_amount)
+                except Exception as exc:
+                    logger.error("Unhandled error scraping %s: %s", url, exc)
+                finally:
+                    await page.close()
+
+        await asyncio.gather(*[_scrape_one(url) for url in urls])
         await browser.close()
 
     logger.info("Scrape complete — %d items collected", len(results))
