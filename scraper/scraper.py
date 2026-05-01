@@ -55,6 +55,23 @@ def _parse_price(raw: str | None) -> float | None:
         return None
 
 
+def _parse_countdown(raw: str | None) -> datetime | None:
+    """Parse OVM countdown 'X d Y u Z min W sec' into an absolute UTC datetime."""
+    if not raw:
+        return None
+    from datetime import timedelta
+    m = re.search(r'(\d+)\s*d\s*(\d+)\s*u\s*(\d+)\s*min\s*(\d+)\s*sec', raw, re.IGNORECASE)
+    if m:
+        delta = timedelta(days=int(m.group(1)), hours=int(m.group(2)),
+                          minutes=int(m.group(3)), seconds=int(m.group(4)))
+        return datetime.now(timezone.utc) + delta
+    m = re.search(r'(\d+)\s*u\s*(\d+)\s*min\s*(\d+)\s*sec', raw, re.IGNORECASE)
+    if m:
+        delta = timedelta(hours=int(m.group(1)), minutes=int(m.group(2)), seconds=int(m.group(3)))
+        return datetime.now(timezone.utc) + delta
+    return None
+
+
 def _parse_dutch_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
@@ -156,41 +173,49 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
         )
         return m.group(1).strip() if m else None
 
-    # Current bid — "Huidig bod" or "Bod" label, then € amount on same/next line
+    # Current bid — OVM renders "€ 231,-" on its own line ABOVE the "Huidig bod" label
     bid_raw = None
     bod_m = re.search(
-        r"(?:huidig\s+)?bod[:\s]*\n?\s*€?\s*([\d.,]+)",
+        r"€\s*([\d.,]+)[,-]?\s*\n[\s\n]*Huidig\s+bod",
         page_text,
         re.IGNORECASE,
     )
     if bod_m:
         bid_raw = bod_m.group(1)
     else:
-        # Fallback: first € amount anywhere on the page
+        # Fallback: first € amount on the page
         euro_m = re.search(r"€\s*([\d.,]+)", page_text)
         if euro_m:
             bid_raw = euro_m.group(1)
     current_bid = _parse_price(bid_raw) or 0.0
 
-    # End date
-    end_raw = _after_label(r"(?:sluitingstijd|sluit(?:ing)?|einddatum|eindigt op)")
-    end_date = _parse_dutch_datetime(end_raw) or datetime.now(timezone.utc)
+    # End date — OVM shows a live countdown "Kavel sluit over: X d Y u Z min W sec"
+    end_date = datetime.now(timezone.utc)
+    countdown_m = re.search(
+        r"kavel\s+sluit\s+over\s*:?\s*\n?\s*((?:\d+\s*d\s*)?\d+\s*u\s*\d+\s*min\s*\d+\s*sec)",
+        page_text,
+        re.IGNORECASE,
+    )
+    if countdown_m:
+        end_date = _parse_countdown(countdown_m.group(1)) or end_date
+    else:
+        end_raw = _after_label(r"(?:sluitingstijd|einddatum|eindigt\s+op)")
+        end_date = _parse_dutch_datetime(end_raw) or end_date
 
     # Start date
-    start_raw = _after_label(r"(?:startdatum|start(?:s)?|begindatum)")
+    start_raw = _after_label(r"(?:startdatum|begindatum)")
     start_date = _parse_dutch_datetime(start_raw) or datetime.now(timezone.utc)
 
     # Category
     category = _after_label(r"categorie(?:ën)?")
 
     # Location
-    location = _after_label(r"(?:locatie|afhaallocatie|ophaallocatie|plaats)")
+    location = _after_label(r"(?:locatie|afhaallocatie|ophaallocatie)")
 
-    # Appraisal value
-    appraisal_raw = _after_label(r"(?:taxatiewaarde|schatting(?:swaarde)?|geschatte\s+waarde)")
-    if appraisal_raw:
-        # Strip leading € if present
-        appraisal_raw = re.sub(r"^€\s*", "", appraisal_raw)
+    # Appraisal — OVM uses "Consumentenprijs" as the reference value
+    appraisal_raw = _after_label(
+        r"(?:consumentenprijs|taxatiewaarde|schatting(?:swaarde)?|geschatte\s+waarde)"
+    )
     appraisal_value = _parse_price(appraisal_raw)
 
     item = AuctionItem(
