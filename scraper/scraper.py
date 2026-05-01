@@ -119,12 +119,15 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
         except Exception:
             return None
 
-    # Log a snippet of the first kavel page's HTML to discover real selectors
+    # Log body HTML of the first kavel page to discover real selectors
     if not _logged_kavel_html:
         _logged_kavel_html = True
         try:
             html = await page.content()
-            logger.info("KAVEL PAGE HTML SAMPLE (first 3000 chars): %s", html[:3000])
+            # Skip <head>, log up to 6000 chars of body content
+            body_start = html.lower().find("<body")
+            snippet = html[body_start:body_start + 6000] if body_start != -1 else html[3000:9000]
+            logger.info("KAVEL PAGE BODY HTML: %s", snippet)
         except Exception:
             pass
 

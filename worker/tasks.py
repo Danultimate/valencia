@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from celery import Celery
-from celery.schedules import crontab
 
 from analysis.analyzer import calculate_opportunity_score
 from analysis import model as ml_model
@@ -24,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
-SCRAPE_INTERVAL_SECONDS = int(os.environ.get("SCRAPE_INTERVAL_SECONDS", "5400"))
 
 app = Celery("valencia_auctions", broker=BROKER_URL, backend=RESULT_BACKEND)
 
@@ -37,13 +35,6 @@ app.conf.update(
     worker_max_tasks_per_child=50,
     task_acks_late=True,
 )
-
-app.conf.beat_schedule = {
-    "scrape-auctions": {
-        "task": "worker.tasks.run_scrape_pipeline",
-        "schedule": SCRAPE_INTERVAL_SECONDS,
-    },
-}
 
 
 @app.on_after_configure.connect
