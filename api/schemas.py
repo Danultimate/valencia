@@ -1,5 +1,4 @@
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, computed_field
 
@@ -9,7 +8,7 @@ class BidHistorySchema(BaseModel):
 
     id: int
     auction_id: str
-    bid_amount: Decimal
+    bid_amount: float
     timestamp: datetime
 
 
@@ -23,13 +22,13 @@ class AuctionSchema(BaseModel):
     url: str
     start_date: datetime
     end_date: datetime
-    appraisal_value: Decimal | None
-    estimated_value: Decimal | None
+    appraisal_value: float | None
+    estimated_value: float | None
     is_active: bool
-    opportunity_score: Decimal
+    opportunity_score: float
     last_scraped_at: datetime | None
     created_at: datetime
-    current_bid: Decimal | None = None
+    current_bid: float | None = None
 
     @computed_field
     @property
