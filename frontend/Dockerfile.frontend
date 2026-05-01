@@ -15,12 +15,14 @@ RUN npm run build
 FROM nginx:1.27-alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/templates/default.conf.template
+# Keep template outside /etc/nginx/templates/ — the nginx entrypoint would run
+# envsubst on ALL env vars there, corrupting nginx variables like $host and $uri.
+COPY nginx.conf /tmp/nginx.conf.template
 
-# PORT defaults to 80 for docker-compose (Hostinger), Railway overrides it
+# PORT defaults to 80 for docker-compose; Railway overrides it at runtime
 ENV PORT=80
 ENV API_URL=http://fastapi:8000
 
 EXPOSE 80
 
-CMD ["/bin/sh", "-c", "envsubst '${PORT} ${API_URL}' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+CMD ["/bin/sh", "-c", "envsubst '${PORT} ${API_URL}' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
