@@ -112,77 +112,77 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
 
     auction_id = _extract_auction_id(url)
 
-    async def text(selector: str) -> str | None:
-        try:
-            el = await page.query_selector(selector)
-            return (await el.inner_text()).strip() if el else None
-        except Exception:
-            return None
+    # Get rendered text — works regardless of hashed MUI class names
+    try:
+        page_text = await page.inner_text("body")
+    except Exception:
+        page_text = ""
 
-    # Log body HTML of the first kavel page to discover real selectors
+    # Log first page: rendered text (compact, shows actual field labels) + HTML tail
     if not _logged_kavel_html:
         _logged_kavel_html = True
+        logger.info("KAVEL PAGE TEXT:\n%s", page_text[:3000])
         try:
             html = await page.content()
-            # Skip <head>, log up to 6000 chars of body content
             body_start = html.lower().find("<body")
-            snippet = html[body_start:body_start + 6000] if body_start != -1 else html[3000:9000]
-            logger.info("KAVEL PAGE BODY HTML: %s", snippet)
+            snippet = html[body_start + 6000:body_start + 14000] if body_start != -1 else html[9000:17000]
+            logger.info("KAVEL PAGE HTML (mid-body): %s", snippet)
         except Exception:
             pass
 
-    title = (
-        await text("h1")
-        or await text(".lot-title")
-        or await text(".auction-title")
-        or await text(".kavel-title")
-        or "Onbekend"
-    )
+    # Title — h1 is stable across MUI apps
+    title = "Onbekend"
+    try:
+        el = await page.query_selector("h1")
+        if el:
+            title = (await el.inner_text()).strip() or "Onbekend"
+    except Exception:
+        pass
 
-    # Current bid
-    bid_raw = (
-        await text(".current-bid")
-        or await text(".bid-amount")
-        or await text("[data-current-bid]")
-        or await text(".price")
-        or await text(".huidig-bod")
-        or await text(".current-price")
+    def _after_label(label_pattern: str) -> str | None:
+        """Return the first non-empty token after a Dutch field label in page text."""
+        m = re.search(
+            label_pattern + r"[:\s]*\n?\s*([^\n]{1,120})",
+            page_text,
+            re.IGNORECASE,
+        )
+        return m.group(1).strip() if m else None
+
+    # Current bid — "Huidig bod" or "Bod" label, then € amount on same/next line
+    bid_raw = None
+    bod_m = re.search(
+        r"(?:huidig\s+)?bod[:\s]*\n?\s*€?\s*([\d.,]+)",
+        page_text,
+        re.IGNORECASE,
     )
+    if bod_m:
+        bid_raw = bod_m.group(1)
+    else:
+        # Fallback: first € amount anywhere on the page
+        euro_m = re.search(r"€\s*([\d.,]+)", page_text)
+        if euro_m:
+            bid_raw = euro_m.group(1)
     current_bid = _parse_price(bid_raw) or 0.0
 
     # End date
-    end_raw = (
-        await text(".end-date")
-        or await text(".closing-time")
-        or await text("[data-end-time]")
-        or await text(".auction-end")
-        or await text(".sluitingstijd")
-        or await text(".einddatum")
-    )
+    end_raw = _after_label(r"(?:sluitingstijd|sluit(?:ing)?|einddatum|eindigt op)")
     end_date = _parse_dutch_datetime(end_raw) or datetime.now(timezone.utc)
 
-    # Start date (best effort)
-    start_raw = await text(".start-date") or await text("[data-start-time]") or await text(".startdatum")
+    # Start date
+    start_raw = _after_label(r"(?:startdatum|start(?:s)?|begindatum)")
     start_date = _parse_dutch_datetime(start_raw) or datetime.now(timezone.utc)
 
     # Category
-    category = (
-        await text(".category")
-        or await text(".breadcrumb li:nth-child(2)")
-        or await text("[data-category]")
-        or await text(".categorie")
-    )
+    category = _after_label(r"categorie(?:ën)?")
 
     # Location
-    location = await text(".location") or await text("[data-location]") or await text(".locatie")
+    location = _after_label(r"(?:locatie|afhaallocatie|ophaallocatie|plaats)")
 
-    # Appraisal value (taxatiewaarde / schattingswaarde)
-    appraisal_raw = (
-        await text(".appraisal-value")
-        or await text(".taxatiewaarde")
-        or await text("[data-appraisal]")
-        or await text(".schattingswaarde")
-    )
+    # Appraisal value
+    appraisal_raw = _after_label(r"(?:taxatiewaarde|schatting(?:swaarde)?|geschatte\s+waarde)")
+    if appraisal_raw:
+        # Strip leading € if present
+        appraisal_raw = re.sub(r"^€\s*", "", appraisal_raw)
     appraisal_value = _parse_price(appraisal_raw)
 
     item = AuctionItem(
