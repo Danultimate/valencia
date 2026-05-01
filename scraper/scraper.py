@@ -82,11 +82,15 @@ def _parse_dutch_datetime(raw: str | None) -> datetime | None:
 
 
 def _extract_auction_id(url: str) -> str:
-    # Extract numeric or slug ID from URL path
-    match = re.search(r"/(?:lot|kavel|item|veiling)/([^/?#]+)", url, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    # Fallback: last non-empty path segment
+    # OVM pattern: /nl/veilingen/{veiling_id}/kavels/{kavel_id}
+    # Must use both IDs — kavel numbers repeat across veilingen
+    m = re.search(r"/veilingen/(\d+)/kavels/([^/?#]+)", url, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    # Generic fallback for lot/kavel/item slugs
+    m = re.search(r"/(?:lot|kavels?|item|veiling)/([^/?#]+)", url, re.IGNORECASE)
+    if m:
+        return m.group(1)
     parts = [p for p in url.rstrip("/").split("/") if p]
     return parts[-1] if parts else url
 
@@ -102,7 +106,11 @@ async def _scrape_item_page(page: Page, url: str) -> tuple[AuctionItem, BidSnaps
     global _logged_kavel_html
     try:
         await page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2500)
+        # Wait for React to paint — h1 signals main content is ready
+        try:
+            await page.wait_for_selector("h1", timeout=6000)
+        except Exception:
+            await page.wait_for_timeout(3000)
     except PWTimeout:
         logger.warning("Timeout loading %s — skipping", url)
         return None
