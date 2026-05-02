@@ -23,6 +23,7 @@ class Auction(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
+    title_es: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(128))
     location: Mapped[str | None] = mapped_column(String(128))
     appraisal_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))

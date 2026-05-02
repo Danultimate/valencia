@@ -16,8 +16,10 @@ from storage.repository import (
     get_current_bid,
     get_training_data,
     update_scores,
+    update_title_es,
     upsert_auction,
 )
+from translation.deepl import translate_nl_to_es
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,8 @@ def run_scrape_pipeline(self):
     db = SessionLocal()
     scored = 0
     newly_completed = 0
+    # Collect (id, dutch_title) for auctions that need a Spanish translation
+    to_translate: list[tuple[str, str]] = []
 
     try:
         for item, snapshot in results:
@@ -85,6 +89,12 @@ def run_scrape_pipeline(self):
             # Track newly completed auctions for retraining decision
             if not auction.is_active:
                 newly_completed += 1
+
+            # Queue translation if title is meaningful and missing/changed
+            if item.title != "Onbekend" and (
+                auction.title_es is None or auction.title != item.title
+            ):
+                to_translate.append((item.id, item.title))
 
             # Persist bid snapshot
             append_bid(db, item.id, Decimal(str(snapshot.bid_amount)))
@@ -115,6 +125,17 @@ def run_scrape_pipeline(self):
             )
             update_scores(db, item.id, score, estimated_value)
             scored += 1
+
+        # Batch-translate all queued titles in one DeepL API call
+        if to_translate:
+            ids, titles = zip(*to_translate)
+            translations = translate_nl_to_es(list(titles))
+            saved = 0
+            for auction_id, title_es in zip(ids, translations):
+                if title_es:
+                    update_title_es(db, auction_id, title_es)
+                    saved += 1
+            logger.info("Translated %d/%d titles to Spanish", saved, len(to_translate))
 
         # Retrain ML model if enough new completed auctions
         if ml_model.should_retrain(newly_completed):

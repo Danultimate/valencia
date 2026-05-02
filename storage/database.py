@@ -29,6 +29,9 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS title_es TEXT"))
+        conn.commit()
 
 
 def get_db() -> Generator[Session, None, None]:

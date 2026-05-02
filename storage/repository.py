@@ -49,6 +49,13 @@ def update_scores(
     db.commit()
 
 
+def update_title_es(db: Session, auction_id: str, title_es: str) -> None:
+    auction = db.get(Auction, auction_id)
+    if auction:
+        auction.title_es = title_es
+        db.commit()
+
+
 def mark_inactive(db: Session, auction_id: str) -> None:
     auction = db.get(Auction, auction_id)
     if auction:

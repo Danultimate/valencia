@@ -17,6 +17,7 @@ class AuctionSchema(BaseModel):
 
     id: str
     title: str
+    title_es: str | None
     category: str | None
     location: str | None
     url: str
